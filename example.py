@@ -13,7 +13,8 @@ cWidth = 160
 cHeight = 120
 
 # name of camera
-name = "hub-camera"
+name = 'hub-camera'
+roborioip = '10.2.94.2' # format: 10.##.##.2 where #### is team number
 
 # lower color threshold in format HSV (Hue, Saturation, Value)--NOT RGB
 lower_threshold = np.array([56, 100, 65])
@@ -30,7 +31,7 @@ config = {     "fps": 30,     "height": 480,     "pixel format": "mjpeg",     "p
 #     print("could not open '{}': {}".format(configFile, err), file=sys.stderr)
 
 # initialize network tables
-NetworkTablesInstance.getDefault().initialize(server='10.2.94.2')
+NetworkTablesInstance.getDefault().initialize(server=roborioip)
 # get network table of the name of the camera
 sd = NetworkTablesInstance.getDefault().getTable(name)
 
@@ -103,7 +104,7 @@ while True:
         cx = centerX # gets contour's x-coord
         cy = centerY # gets contour's y-coord
         ca = cv2.contourArea(largestContour) # gets contour area
-        
+
     # compress image to use less network bandwidth
     output_img = cv2.resize(input_img, (cWidth, cHeight))
 
