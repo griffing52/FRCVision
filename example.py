@@ -13,10 +13,7 @@ cWidth = 160
 cHeight = 120
 
 # name of camera
-name = "shooter-camera"
-
-# in pixels, the max height difference a contour can be from the median y-coordinate in all the contour
-yTolerance = 60 
+name = "hub-camera"
 
 # lower color threshold in format HSV (Hue, Saturation, Value)--NOT RGB
 lower_threshold = np.array([56, 100, 65])
@@ -54,7 +51,7 @@ camera.setResolution(width, height)
 # initialize input and output instances
 sink = cs.getVideo()
 output = cs.putVideo(name, width, height)
-# creates video server, which can be
+# creates video server on port 8083, which can be accessed by going to "wpilibpi.local:8083" in a browser or by putting its ip address pollowed by ":8083"
 mjpeg = MjpegServer("cvhttpserver", "", 8083)
 mjpeg.setSource(output)
 
@@ -62,87 +59,59 @@ input_img = np.array([[]])
 
 # vision loop
 while True:
-    # get frame
+    # sets variable input_img to the new frame
     time, input_img = sink.grabFrame(input_img)
 
     if time == 0: # There is an error
         output.notifyError(sink.getError())
         continue
 
-    # convert image to hsv
+    # convert BGR image to HSV (Hue, Saturation, Value respectively)
     hsv = cv2.cvtColor(input_img, cv2.COLOR_BGR2HSV)
     
-    # get threshold
-    # # TODO may return erroneous values (may be why sometimes not detect)
-    lower_threshold = np.array([lt[0], lt[1], lt[2]])
-    # lower_threshold = np.array([sd.getNumber("LowerThresholdH", lt[0]), sd.getNumber("LowerThresholdS", lt[1]), sd.getNumber("LowerThresholdV", lt[2])])
-    upper_threshold = np.array([ut[0], ut[1], ut[2]])
-    # upper_threshold = np.array([sd.getNumber("UpperThresholdH", ut[0]), sd.getNumber("UpperThresholdS", ut[1]), sd.getNumber("UpperThresholdV", ut[2])])
+    # gets grayscale image of all pixels within the color threshold
     threshold = cv2.inRange(hsv, lower_threshold, upper_threshold)
 
-    # erode and then dilate by 3 x 3 kernel of 1s
+    # erodes--remove bordering pixels--and then dilates pixel space by a 3 x 3 kernel of 1s 
+    # this helps elminate some noise, more information found here:
+    # https://docs.opencv.org/3.4/db/df6/tutorial_erosion_dilatation.html
     kernel = np.ones((3, 3), np.uint8)
-    threshold = cv2.morphologyEx(threshold, cv2.MORPH_OPEN, kernel)    
-    calibration = cv2.cvtColor(threshold, cv2.COLOR_GRAY2RGB)
+    threshold = cv2.morphologyEx(threshold, cv2.MORPH_OPEN, kernel)
 
-    # get contours
+    # gets contours in the masked grayscale image
     _, contours, _ = cv2.findContours(threshold, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-
-    # init filtered array
-    filtered = []
     
-    # fill filtered array with values from all contours with an area greater than 15
-    # respective values are the contour's center x-value, center y-value, 
-    # bounding-rectangle lower-left x-val bounding-rect lower-left y-val, 
-    # bounding rect upper-right x, bounding-rect upper-right y-val, and area
-    for c in contours:
-        area = cv2.contourArea(c)
-        if (area < 25 or area > 750):
-            continue
-        rect = cv2.boundingRect(c)
-        x,y,w,h = rect
+    # init largestContour
+    largestContour = np.array([[]])
+    
+    # initializes final values
+    ct = 0 # number of contours found  
+    cx = 0 # x-position of largest contour
+    cy = 0 # y-position of largest contour
+    ca = 0 # area of largest contour
+
+    # if there are any contours found
+    if len(contours) > 0:
+        largestContour = max(contours, cv2.contourArea)
+        
         M = cv2.moments(c)
-        # gets center x and y
         if M["m00"] != 0:
-            cX = int(M["m10"] / M["m00"])
-            cY = int(M["m01"] / M["m00"])
-            filtered.append((cX, cY, x, x+w, y, y+h, area))
+            centerX = int(M["m10"] / M["m00"])
+            centerY = int(M["m01"] / M["m00"])
 
-    rv = 0
-    rw = 0
-    rx = 0
-    # if there are any values in filtered
-    if len(filtered) > 0:
-        # finds median value and filters for all values within the y tolerance on smart dashboard
-        filtered.sort(key=lambda c: c[1]) # sorts array by y-value
-        median = filtered[int(len(filtered)/2)][1] # gets median y-value
-        # filtered = list(filter(lambda f: abs(median-f[1]) < yT, filtered)) # filters
-        filtered = list(filter(lambda f: abs(median-f[1]) < yTolerance, filtered)) # filters
+        ct = len(contours) # gets the amount of contours found
+        cx = centerX # gets contour's x-coord
+        cy = centerY # gets contour's y-coord
+        ca = cv2.contourArea(largestContour) # gets contour area
+        
+    # compress image to use less network bandwidth
+    output_img = cv2.resize(input_img, (cWidth, cHeight))
 
-        # if there are any values left in filtered
-        if len(filtered) > 1:
-            # sorts filtered array by contour area and caps it to at-most 4 elements
-            filtered = sorted(filtered, key=lambda f: f[6])[-4:]
-            rv = len(filtered) # gets the amount of contours found
-
-            # gets lower-left-most x- and y-value and upper-right-most x- and y-value for final bounding box
-            fx, fy, bx, by = filtered[0][2], filtered[0][4], filtered[0][3], filtered[0][5]
-            for f in filtered:
-                if f[2] < fx: fx = f[2]
-                if f[4] < fy: fy = f[4]
-                if f[3] > bx: bx = f[3]
-                if f[5] > by: by = f[5]
-            rw = bx - fx
-            rx = -0.0937486*(0.5*(bx+fx)-0.5*width) - 4.99446 # x in pixels converted to angle in degrees!
-            # draws bounding rectangle
-            cv2.rectangle(input_img,(fx, fy),(bx, by),(0,255,0),2)
-
-    final = cv2.resize(input_img, (cWidht, cHeight)) # TODO TEST
-
-    # posts number of elements found, width of bounding box, and x-value in angle degrees
-    sd.putNumber("rv", rv)
-    sd.putNumber("rw", rw)
-    sd.putNumber("rx", rx)
+    # posts all values to network tables
+    sd.putNumber("ct", ct)
+    sd.putNumber("cx", cx)
+    sd.putNumber("cy", cy)
+    sd.putNumber("ca", ca)
 
     # posts final image to stream
-    output.putFrame(final)
+    output.putFrame(output_img)
